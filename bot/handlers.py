@@ -41,7 +41,7 @@ async def add_expense(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 amount=amount,
                 paid_by=user_id,
                 group_id=None,  # Personal expense for now
-                participant_ids=[user_id],
+                IDs=[user_id],
                 split_type="equal"
             )
             
