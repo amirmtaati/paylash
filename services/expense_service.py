@@ -1,5 +1,4 @@
-from repositories.expenses import create_expense
-from repositories.users import add_participant
+from repositories.expenses import create_expense, add_participant
 
 def calculate_equal_split(amount, num):
     return amount / num
