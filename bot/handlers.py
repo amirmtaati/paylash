@@ -37,7 +37,7 @@ async def add_expense(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # For now: create expense without group, just for this user
             expense_id = create_expense_with_split(
                 session=session,
-                description=description,
+                desc=description,
                 amount=amount,
                 paid_by=user_id,
                 group_id=None,  # Personal expense for now
