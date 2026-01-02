@@ -40,3 +40,6 @@ def create_expense_with_split(session, desc, amount, paid_by, group_id, IDs, spl
             )
 
     return expense_id
+
+def get_user_blance():
+    pass
