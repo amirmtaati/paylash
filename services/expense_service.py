@@ -1,9 +1,5 @@
-from repositories import (
-    create_user, get_all_users,
-    create_group, get_all_groups,
-    add_member_to_group, get_members_of_group,
-    create_expense, add_participant, get_participants_for_expense
-)
+from repositories.expenses import create_expense
+from repositories.users import add_participant
 
 def calculate_equal_split(amount, num):
     return amount / num
