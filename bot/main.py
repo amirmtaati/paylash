@@ -1,5 +1,5 @@
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
-from bot.handlers import start
+from bot.handlers import start, add_expense
 import os
 
 def main():
@@ -8,6 +8,7 @@ def main():
     app = Application.builder().token(token).build()
     
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("addexpense", add_expense))
     
     print("Bot starting...")
     app.run_polling()
