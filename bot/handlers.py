@@ -2,7 +2,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from db.connection import get_session
 from repositories.users import create_user, get_user_by_id
-from services import create_expense_with_split, get_user_balance
+from services.expense_service import create_expense_with_split, get_user_balance
 from decimal import Decimal
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
