@@ -3,11 +3,22 @@ from telegram.ext import ContextTypes
 from db.connection import get_session
 from repositories.users import create_user, get_user_by_id
 from services.expense_service import create_expense_with_split, get_user_balance
+from services.balance_service import get_balance_with_names
 from decimal import Decimal
+
+async def user_exists(session, userID):
+    user = get_user_by_id(session, userID)
+    return (user) ? True : False
+
+async def ensure_user_exists(session, userID, user_name, first_name):
+    if !user_exists(session, userID):
+        create_user(session, username=user_name, first_name=first_name)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     session = get_session()
+    
+    ensure_user_exists(session, user.id, user.user_name, user.first_name)
     
     try:
         await update.message.reply_text(
@@ -55,3 +66,31 @@ async def add_expense(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
     except ValueError as e:
         await update.message.reply_text(f"Error: {e}")
+
+
+async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show user's balance - who owes them and who they owe"""
+    session = get_session()
+    user_id = update.effective_user.id
+    
+    try:
+        await ensure_user_exists(session, update.effective_user)
+        
+        balances = get_balance_with_names(session, user_id)
+        
+        if not balances:
+            await update.message.reply_text("💰 You have no expenses yet!")
+            return
+        
+        message = "💰 Your Balance:\n\n"
+        
+        for name, amount in balances:
+            if amount > 0:
+                message += f"✅ {name} owes you €{amount:.2f}\n"
+            else:
+                message += f"❌ You owe {name} €{abs(amount):.2f}\n"
+        
+        await update.message.reply_text(message)
+        
+    finally:
+        session.close()

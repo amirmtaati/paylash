@@ -7,9 +7,6 @@ from sqlalchemy import (
 
 metadata = MetaData()
 
-# -----------------------
-# Users table
-# -----------------------
 users = Table(
     "users",
     metadata,
@@ -19,9 +16,6 @@ users = Table(
     Column("created_at", DateTime(timezone=True), server_default=func.now())
 )
 
-# -----------------------
-# Groups table
-# -----------------------
 groups = Table(
     "groups",
     metadata,
@@ -31,9 +25,6 @@ groups = Table(
     Column("created_at", DateTime(timezone=True), server_default=func.now())
 )
 
-# -----------------------
-# Group Members table (many-to-many)
-# -----------------------
 group_members = Table(
     "group_members",
     metadata,
@@ -43,9 +34,6 @@ group_members = Table(
     PrimaryKeyConstraint("group_id", "user_id")  # composite primary key
 )
 
-# -----------------------
-# Expenses table
-# -----------------------
 expenses = Table(
     "expenses",
     metadata,
@@ -59,9 +47,6 @@ expenses = Table(
     Column("created_at", DateTime(timezone=True), server_default=func.now())
 )
 
-# -----------------------
-# Expense Participants table (many-to-many)
-# -----------------------
 expense_participants = Table(
     "expense_participants",
     metadata,
