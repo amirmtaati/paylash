@@ -10,7 +10,7 @@ metadata = MetaData()
 users = Table(
     "users",
     metadata,
-    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("id", Integer, primary_key=True, autoincrement=False),
     Column("username", String(255), nullable=True),
     Column("first_name", String(255), nullable=True),
     Column("created_at", DateTime(timezone=True), server_default=func.now())

@@ -76,6 +76,7 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await ensure_user_exists(session, update.effective_user)
         
+        # Get balances
         balances = get_balance_with_names(session, user_id)
         
         if not balances:
