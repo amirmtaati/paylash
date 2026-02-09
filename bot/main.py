@@ -6,6 +6,7 @@ from bot.handlers import (
     start, balance, my_groups,
     create_group_start, receive_group_name, add_group_member,
     add_expense_start, receive_group_selection, handle_expense_details,
+    handle_button_callback,
     cancel,
     WAITING_FOR_GROUP_NAME, WAITING_FOR_MEMBER_SELECTION, WAITING_FOR_GROUP_SELECTION
 )
@@ -30,7 +31,8 @@ def main():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_name)
             ],
             WAITING_FOR_MEMBER_SELECTION: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, add_group_member)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, add_group_member),
+                CallbackQueryHandler(add_group_member)  # Handle button clicks too
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
@@ -49,6 +51,9 @@ def main():
     )
     app.add_handler(add_expense_conv)
     
+    # Global callback query handler for inline buttons (must be before message handler)
+    app.add_handler(CallbackQueryHandler(handle_button_callback))
+    
     # Handler for expense details (when user has selected a group)
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND, 
@@ -56,12 +61,14 @@ def main():
     ))
     
     print("🤖 PayLash Bot starting...")
-    print("Commands available:")
+    print("✨ Beautiful UI with inline buttons enabled!")
+    print("\nCommands available:")
     print("  /start - Start the bot")
     print("  /creategroup - Create a new group")
     print("  /addexpense - Add an expense")
     print("  /balance - Check your balance")
     print("  /mygroups - View your groups")
+    print("\n💡 Tip: Use the inline buttons for a better experience!")
     app.run_polling()
 
 if __name__ == "__main__":
