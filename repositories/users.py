@@ -2,11 +2,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, insert, update, delete
 from db.schema import users, groups, group_members, expenses, expense_participants
 
-def create_user(session: Session, username: str = None, first_name: str = None):
-    stmt = insert(users).values(username=username, first_name=first_name)
+def create_user(session: Session, user_id: int, username: str = None, first_name: str = None):
+    """Create user with explicit Telegram user_id"""
+    stmt = insert(users).values(id=user_id, username=username, first_name=first_name)
     result = session.execute(stmt)
     session.commit()
-    user_id = result.inserted_primary_key[0]
     return get_user_by_id(session, user_id)
 
 def get_user_by_id(session: Session, user_id: int):

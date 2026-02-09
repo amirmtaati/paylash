@@ -17,6 +17,19 @@ def get_all_groups(session: Session):
     stmt = select(groups)
     return session.execute(stmt).fetchall()
 
+def get_groups_for_user(session: Session, user_id: int):
+    """Get all groups that a user is a member of"""
+    stmt = select(
+        groups
+    ).select_from(
+        group_members
+    ).join(
+        groups, group_members.c.group_id == groups.c.id
+    ).where(
+        group_members.c.user_id == user_id
+    )
+    return session.execute(stmt).fetchall()
+
 def delete_group(session: Session, group_id: int):
     stmt = delete(groups).where(groups.c.id == group_id)
     session.execute(stmt)
@@ -38,3 +51,8 @@ def remove_member_from_group(session: Session, group_id: int, user_id: int):
 def get_members_of_group(session: Session, group_id: int):
     stmt = select(group_members).where(group_members.c.group_id == group_id)
     return session.execute(stmt).fetchall()
+
+def get_member_count(session: Session, group_id: int):
+    """Get the number of members in a group"""
+    members = get_members_of_group(session, group_id)
+    return len(members)
