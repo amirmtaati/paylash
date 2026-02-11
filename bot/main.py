@@ -8,6 +8,7 @@ from bot.handlers import (
     add_expense_start, receive_group_selection, handle_expense_details,
     handle_button_callback,
     setid,
+    addmember,
     cancel,
     WAITING_FOR_GROUP_NAME, WAITING_FOR_MEMBER_SELECTION, WAITING_FOR_GROUP_SELECTION
 )
@@ -31,6 +32,7 @@ def main():
     app.add_handler(CommandHandler("balance", balance))
     app.add_handler(CommandHandler("mygroups", my_groups))
     app.add_handler(CommandHandler("setid", setid))
+    app.add_handler(CommandHandler("addmember", addmember))
     
     # Conversation handler for creating groups
     create_group_conv = ConversationHandler(
@@ -44,7 +46,7 @@ def main():
             ],
             WAITING_FOR_MEMBER_SELECTION: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, add_group_member),
-                CallbackQueryHandler(add_group_member)  # Handle button clicks too
+                CallbackQueryHandler(add_group_member, pattern="^(done_adding_members|help_find_id|continue_adding)$")
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
@@ -84,6 +86,7 @@ def main():
     print("  /balance - Check your balance")
     print("  /mygroups - View your groups")
     print("  /setid - Set your shareable custom ID")
+    print("  /addmember - Add members to your group by name")
     print("\n💡 Tip: Use the inline buttons for a better experience!")
     app.run_polling()
 
