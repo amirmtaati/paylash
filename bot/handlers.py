@@ -1,7 +1,9 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from db.connection import get_session
-from repositories.users import create_user, get_user_by_id
+from repositories.users import (
+    create_user, get_user_by_id, get_user_by_identifier, set_custom_id, normalize_custom_id
+)
 from repositories.groups import (
     create_group, add_member_to_group, get_groups_for_user, 
     get_members_of_group, get_member_count, get_group_by_id
@@ -47,7 +49,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💡 `/creategroup` - Start a new group\n"
             f"💸 `/addexpense` - Record an expense\n"
             f"📊 `/balance` - Check who owes what\n"
-            f"📋 `/mygroups` - View your groups\n\n"
+            f"📋 `/mygroups` - View your groups\n"
+            f"🆔 `/setid <custom_id>` - Set your own shareable ID\n\n"
             f"_Your Telegram ID: `{user.id}`_"
         )
         
@@ -67,13 +70,17 @@ async def create_group_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     try:
         ensure_user_exists(session, user.id, user.username, user.first_name)
-        
-        await update.message.reply_text(
+
+        if update.callback_query:
+            await update.callback_query.answer()
+
+        reply_target = update.message if update.message else update.callback_query.message
+        await reply_target.reply_text(
             "Let's create a new group! 🎉\n\n"
             "What would you like to name this group?\n"
             "(e.g., 'Pizza Night', 'Trip to Rome', 'Apartment 4B')"
         )
-        
+
         return WAITING_FOR_GROUP_NAME
         
     finally:
@@ -110,7 +117,7 @@ async def receive_group_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"👥 *Current members:* 1 (you)\n\n"
             f"*How to add members:*\n"
             f"1️⃣ Forward any message from the person you want to add\n"
-            f"2️⃣ Or send their Telegram user ID as a number\n"
+            f"2️⃣ Send their Telegram user ID (number) *or* custom ID (e.g. `john-doe`)\n"
             f"3️⃣ Click 'Done' when you have at least 2 members\n\n"
             f"💡 Need help finding user IDs? Click the button below!",
             parse_mode='Markdown',
@@ -192,7 +199,7 @@ async def add_group_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(
                 "👥 Continue adding members:\n\n"
                 "• Forward a message from them\n"
-                "• Or send their user ID number\n"
+                "• Or send their user ID number/custom ID\n"
                 "• Click 'Done' when finished"
             )
             return WAITING_FOR_MEMBER_SELECTION
@@ -244,7 +251,8 @@ async def add_group_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             session.close()
     
     # Handle text input
-    text = update.message.text.strip().lower()
+    raw_text = update.message.text.strip()
+    text = raw_text.lower()
     
     if text == 'done':
         group_id = context.user_data.get('current_group_id')
@@ -283,59 +291,50 @@ async def add_group_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     
     else:
-        # Try to parse as user ID
+        group_id = context.user_data.get('current_group_id')
+        session = get_session()
+
         try:
-            member_id = int(text)
-            group_id = context.user_data.get('current_group_id')
-            session = get_session()
-            
-            try:
-                # Check if user exists
-                if not user_exists(session, member_id):
-                    await update.message.reply_text(
-                        f"❌ User {member_id} hasn't started the bot yet.\n"
-                        f"They need to send /start first!\n\n"
-                        f"💡 Or forward a message from them instead!"
-                    )
-                    return WAITING_FOR_MEMBER_SELECTION
-                
-                # Check if already in group
-                members = get_members_of_group(session, group_id)
-                if any(m[1] == member_id for m in members):
-                    await update.message.reply_text(
-                        f"⚠️ This user is already in the group!"
-                    )
-                    return WAITING_FOR_MEMBER_SELECTION
-                
-                # Add member
-                add_member_to_group(session, group_id=group_id, user_id=member_id)
-                member_count = get_member_count(session, group_id)
-                
-                keyboard = [
-                    [InlineKeyboardButton("✅ Done adding members", callback_data="done_adding_members")]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
+            member = get_user_by_identifier(session, raw_text)
+            if not member:
                 await update.message.reply_text(
-                    f"✅ Member added!\n\n"
-                    f"👥 Total members: {member_count}\n\n"
-                    f"Add another or click 'Done' below:",
-                    reply_markup=reply_markup
+                    f"❌ I couldn't find `{raw_text}`.\n"
+                    "Ask them to send /start first, then try their Telegram ID or custom ID.",
+                    parse_mode='Markdown'
                 )
-                
                 return WAITING_FOR_MEMBER_SELECTION
-                
-            finally:
-                session.close()
-                
-        except ValueError:
+
+            member_id = member[0]
+
+            # Check if already in group
+            members = get_members_of_group(session, group_id)
+            if any(m[1] == member_id for m in members):
+                await update.message.reply_text("⚠️ This user is already in the group!")
+                return WAITING_FOR_MEMBER_SELECTION
+
+            # Add member
+            add_member_to_group(session, group_id=group_id, user_id=member_id)
+            member_count = get_member_count(session, group_id)
+
+            keyboard = [
+                [InlineKeyboardButton("✅ Done adding members", callback_data="done_adding_members")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            custom_id = member[1]
+            id_hint = f" (custom ID: {custom_id})" if custom_id else ""
+
             await update.message.reply_text(
-                "❌ Please send:\n"
-                "• A forwarded message from the person\n"
-                "• Their user ID (number)\n"
-                "• Or type 'done' to finish"
+                f"✅ Member added{id_hint}!\n\n"
+                f"👥 Total members: {member_count}\n\n"
+                "Add another or click 'Done' below:",
+                reply_markup=reply_markup
             )
+
             return WAITING_FOR_MEMBER_SELECTION
+
+        finally:
+            session.close()
 
 
 async def my_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -403,11 +402,16 @@ async def add_expense_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         ensure_user_exists(session, user.id, user.username, user.first_name)
-        
+
+        if update.callback_query:
+            await update.callback_query.answer()
+
         groups = get_groups_for_user(session, user.id)
         
+        reply_target = update.message if update.message else update.callback_query.message
+
         if not groups:
-            await update.message.reply_text(
+            await reply_target.reply_text(
                 "❌ You need to create a group first!\n"
                 "Use /creategroup to get started."
             )
@@ -430,14 +434,14 @@ async def add_expense_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ])
         
         if not keyboard:
-            await update.message.reply_text(
+            await reply_target.reply_text(
                 "❌ None of your groups have enough members (minimum 2).\n"
                 "Add more members to your groups first!"
             )
             return ConversationHandler.END
         
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(
+        await reply_target.reply_text(
             "Which group is this expense for?",
             reply_markup=reply_markup
         )
@@ -478,6 +482,57 @@ async def receive_group_selection(update: Update, context: ContextTypes.DEFAULT_
 async def add_expense(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /addexpense command - wrapper to start conversation"""
     return await add_expense_start(update, context)
+
+
+async def setid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Set or view the caller custom ID for easy group invites."""
+    user = update.effective_user
+    session = get_session()
+
+    try:
+        ensure_user_exists(session, user.id, user.username, user.first_name)
+
+        if not context.args:
+            current_user = get_user_by_id(session, user.id)
+            current_custom_id = current_user[1]
+
+            if current_custom_id:
+                await update.message.reply_text(
+                    f"🆔 Your current custom ID is: `{current_custom_id}`\n"
+                    f"Use `/setid <new_id>` to change it.",
+                    parse_mode='Markdown'
+                )
+            else:
+                await update.message.reply_text(
+                    "You have no custom ID yet.\n"
+                    "Set one with: `/setid your_custom_id`",
+                    parse_mode='Markdown'
+                )
+            return
+
+        candidate = normalize_custom_id(context.args[0])
+        allowed_chars = set("abcdefghijklmnopqrstuvwxyz0123456789_-")
+
+        if len(candidate) < 3 or len(candidate) > 32 or any(c not in allowed_chars for c in candidate):
+            await update.message.reply_text(
+                "❌ Invalid custom ID. Use 3-32 chars: lowercase letters, numbers, `_`, `-`.",
+                parse_mode='Markdown'
+            )
+            return
+
+        existing = get_user_by_identifier(session, candidate)
+        if existing and existing[0] != user.id:
+            await update.message.reply_text("❌ That custom ID is already taken. Try another one.")
+            return
+
+        set_custom_id(session, user.id, candidate)
+        await update.message.reply_text(
+            f"✅ Custom ID saved: `{candidate}`\n"
+            f"Others can now add you to groups using this ID.",
+            parse_mode='Markdown'
+        )
+    finally:
+        session.close()
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):

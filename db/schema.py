@@ -11,6 +11,7 @@ users = Table(
     "users",
     metadata,
     Column("id", Integer, primary_key=True, autoincrement=False),
+    Column("custom_id", String(64), nullable=True, unique=True),
     Column("username", String(255), nullable=True),
     Column("first_name", String(255), nullable=True),
     Column("created_at", DateTime(timezone=True), server_default=func.now())
