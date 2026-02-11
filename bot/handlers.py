@@ -401,42 +401,100 @@ async def add_expense_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def receive_group_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle group selection for expense"""
-    query = update.callback_query
-    await query.answer()
+    """Handle group selection for expense from text (ID/name) or callback data."""
+    selectable_groups = context.user_data.get('expense_selectable_groups', {})
 
-    if not query.data.startswith("group_"):
-        await query.message.reply_text(
-            "Please choose a group from the list, or use /cancel to exit this flow."
-        )
-        return WAITING_FOR_GROUP_SELECTION
+    if not selectable_groups:
+        if update.message:
+            await update.message.reply_text(
+                "⚠️ Expense group selection expired. Please run /addexpense again."
+            )
+        elif update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.message.reply_text(
+                "⚠️ Expense group selection expired. Please run /addexpense again."
+            )
+        return ConversationHandler.END
 
-    try:
-        group_id = int(query.data.split('_', maxsplit=1)[1])
-    except (ValueError, IndexError):
-        await query.message.reply_text(
-            "That group selection looks invalid. Please choose one of the listed group buttons."
-        )
+    group_id = None
+    target_message = update.message
+
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        target_message = query.message
+
+        if not query.data.startswith("group_"):
+            await query.message.reply_text(
+                "Please choose a valid group, or use /cancel to exit this flow."
+            )
+            return WAITING_FOR_GROUP_SELECTION
+
+        try:
+            candidate_id = int(query.data.split('_', maxsplit=1)[1])
+        except (ValueError, IndexError):
+            await query.message.reply_text(
+                "That group selection looks invalid. Please choose one of the listed groups."
+            )
+            return WAITING_FOR_GROUP_SELECTION
+
+        if candidate_id in selectable_groups:
+            group_id = candidate_id
+        else:
+            await query.message.reply_text(
+                "That group is not in your selectable list. Please pick one shown above."
+            )
+            return WAITING_FOR_GROUP_SELECTION
+
+    elif update.message and update.message.text:
+        selection = update.message.text.strip()
+
+        if selection.isdigit():
+            candidate_id = int(selection)
+            if candidate_id in selectable_groups:
+                group_id = candidate_id
+
+        if group_id is None:
+            normalized = selection.lower()
+            for candidate_id, candidate_name in selectable_groups.items():
+                if candidate_name.strip().lower() == normalized:
+                    group_id = candidate_id
+                    break
+
+        if group_id is None:
+            valid_choices = "\n".join(
+                f"• `{candidate_id}` — *{candidate_name}*"
+                for candidate_id, candidate_name in selectable_groups.items()
+            )
+            await update.message.reply_text(
+                "❌ I couldn't match that group.\n"
+                "Please send the *group ID* or *exact group name* from this list:\n"
+                f"{valid_choices}",
+                parse_mode='Markdown'
+            )
+            return WAITING_FOR_GROUP_SELECTION
+
+    else:
         return WAITING_FOR_GROUP_SELECTION
 
     context.user_data['expense_group_id'] = group_id
     context.user_data.pop('expense_selectable_groups', None)
-    
+
     session = get_session()
     try:
         group = get_group_by_id(session, group_id)
         group_name = group[1]
-        
-        await update.message.reply_text(
-            f"Adding expense to: {group_name}\n\n"
-            f"Please send the expense details in this format:\n"
-            f"`<amount> <description>`\n\n"
-            f"Example: `50 Pizza dinner`",
+
+        await target_message.reply_text(
+            f"✅ Group selected: *{group_name}*\n\n"
+            "Now send the expense details in this format:\n"
+            "`<amount> <description>`\n\n"
+            "Example: `50 Pizza dinner`",
             parse_mode='Markdown'
         )
-        
-        return ConversationHandler.END  # We'll handle the next message in add_expense_details
-        
+
+        return ConversationHandler.END  # Next text message will be handled by handle_expense_details
+
     finally:
         session.close()
 
