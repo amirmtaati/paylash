@@ -492,8 +492,21 @@ async def receive_group_selection(update: Update, context: ContextTypes.DEFAULT_
     """Handle group selection for expense"""
     query = update.callback_query
     await query.answer()
-    
-    group_id = int(query.data.split('_')[1])
+
+    if not query.data.startswith("group_"):
+        await query.message.reply_text(
+            "Please choose a group from the list, or use /cancel to exit this flow."
+        )
+        return WAITING_FOR_GROUP_SELECTION
+
+    try:
+        group_id = int(query.data.split('_', maxsplit=1)[1])
+    except (ValueError, IndexError):
+        await query.message.reply_text(
+            "That group selection looks invalid. Please choose one of the listed group buttons."
+        )
+        return WAITING_FOR_GROUP_SELECTION
+
     context.user_data['expense_group_id'] = group_id
     
     session = get_session()

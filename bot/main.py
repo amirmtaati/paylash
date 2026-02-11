@@ -61,7 +61,7 @@ def main():
         ],
         states={
             WAITING_FOR_GROUP_SELECTION: [
-                CallbackQueryHandler(receive_group_selection)
+                CallbackQueryHandler(receive_group_selection, pattern=r"^group_\d+$")
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
