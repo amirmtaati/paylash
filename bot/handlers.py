@@ -365,24 +365,20 @@ async def add_expense_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def receive_group_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle group selection for expense"""
-    selection = update.message.text.strip()
-    selectable_groups = context.user_data.get('expense_selectable_groups', {})
+    query = update.callback_query
+    await query.answer()
 
-    group_id = None
-    if selection.isdigit():
-        candidate = int(selection)
-        if candidate in selectable_groups:
-            group_id = candidate
-    else:
-        lowered = selection.lower()
-        for candidate_id, group_name in selectable_groups.items():
-            if group_name.lower() == lowered:
-                group_id = candidate_id
-                break
+    if not query.data.startswith("group_"):
+        await query.message.reply_text(
+            "Please choose a group from the list, or use /cancel to exit this flow."
+        )
+        return WAITING_FOR_GROUP_SELECTION
 
-    if not group_id:
-        await update.message.reply_text(
-            "❌ Invalid group selection. Send a valid group ID or exact group name from the list."
+    try:
+        group_id = int(query.data.split('_', maxsplit=1)[1])
+    except (ValueError, IndexError):
+        await query.message.reply_text(
+            "That group selection looks invalid. Please choose one of the listed group buttons."
         )
         return WAITING_FOR_GROUP_SELECTION
 
@@ -480,6 +476,14 @@ async def addmember(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if not group:
+            # Fallback: explicit quoted name support from /addmember "My Group" user1 user2
+            quoted_name = tokens[0]
+            direct_group = next((g for g in owned_groups if g[1].lower() == quoted_name.lower()), None)
+            if direct_group:
+                group = direct_group
+                member_identifiers = tokens[1:]
+
+        if group and not member_identifiers:
             await update.message.reply_text(
                 "❌ Could not match a group name from your command.\n"
                 "Tip: use quotes for clarity, e.g. `/addmember \"Trip to Rome\" alice-01`\n"
@@ -681,6 +685,105 @@ async def handle_expense_details(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def handle_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Inline buttons are intentionally disabled in command-only mode."""
-    if update.callback_query:
-        await update.callback_query.answer("Inline buttons are disabled. Use commands like /start.")
+    """Handle all inline button callbacks"""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "check_balance":
+        # Show balance
+        user_id = query.from_user.id
+        session = get_session()
+        
+        try:
+            balances = get_balance_with_names(session, user_id)
+            
+            if not balances:
+                keyboard = [[InlineKeyboardButton("➕ Add First Expense", callback_data="add_expense_quick")]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await query.message.reply_text(
+                    "💰 *Your Balance*\n\n"
+                    "No expenses yet!\n"
+                    "Add your first expense to get started.",
+                    parse_mode='Markdown',
+                    reply_markup=reply_markup
+                )
+                return
+            
+            message = "💰 *Your Balance*\n\n"
+            
+            for name, amount in balances:
+                if amount > 0:
+                    message += f"✅ *{name}* owes you €{amount:.2f}\n"
+                else:
+                    message += f"❌ You owe *{name}* €{abs(amount):.2f}\n"
+            
+            keyboard = [[InlineKeyboardButton("➕ Add Expense", callback_data="add_expense_quick")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.message.reply_text(
+                message,
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+            
+        finally:
+            session.close()
+            
+    elif query.data == "view_groups":
+        # Show groups
+        user_id = query.from_user.id
+        session = get_session()
+        
+        try:
+            groups = get_groups_for_user(session, user_id)
+            
+            if not groups:
+                keyboard = [[InlineKeyboardButton("➕ Create Group", callback_data="create_new_group")]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await query.message.reply_text(
+                    "📋 *Your Groups*\n\n"
+                    "You're not part of any groups yet.\n"
+                    "Create one to get started!",
+                    parse_mode='Markdown',
+                    reply_markup=reply_markup
+                )
+                return
+            
+            message = "📋 *Your Groups*\n\n"
+            
+            for i, group in enumerate(groups, 1):
+                group_id = group[0]
+                group_name = group[1]
+                member_count = get_member_count(session, group_id)
+                
+                if member_count == 2:
+                    emoji = "👥"
+                elif member_count <= 5:
+                    emoji = "👨‍👩‍👦"
+                else:
+                    emoji = "👨‍👩‍👧‍👦"
+                
+                message += f"{i}. {emoji} *{group_name}*\n"
+                message += f"   └ {member_count} members\n\n"
+            
+            keyboard = [
+                [InlineKeyboardButton("➕ Create New", callback_data="create_new_group")],
+                [InlineKeyboardButton("💰 Add Expense", callback_data="add_expense_quick")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.message.reply_text(
+                message,
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+            
+        finally:
+            session.close()
+
+    else:
+        await query.message.reply_text(
+            "⚠️ That button action is not available right now. Please try /start again."
+        )
