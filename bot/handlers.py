@@ -31,31 +31,6 @@ def is_group_creator(session, group_id, user_id):
     group = get_group_by_id(session, group_id)
     return bool(group and group[2] == user_id)
 
-
-def _init_group_creation_context(context: ContextTypes.DEFAULT_TYPE, group_id: int, group_name: str):
-    context.user_data['current_group_id'] = group_id
-    context.user_data['group_name'] = group_name
-
-
-async def _announce_group_created(target_message, group_name: str):
-    keyboard = [
-        [InlineKeyboardButton("🆔 How to find user IDs", callback_data="help_find_id")],
-        [InlineKeyboardButton("✅ Done adding members", callback_data="done_adding_members")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await target_message.reply_text(
-        f"✅ Group *'{group_name}'* created!\n\n"
-        f"👥 *Current members:* 1 (you, the creator)\n\n"
-        f"*How to add members:*\n"
-        f"1️⃣ Forward any message from the person you want to add\n"
-        f"2️⃣ Send their Telegram user ID (number) *or* custom ID (e.g. `john-doe`)\n"
-        f"3️⃣ Click 'Done' after adding at least *one* more person (2 total members)\n\n"
-        f"💡 Need help finding user IDs? Click the button below!",
-        parse_mode='Markdown',
-        reply_markup=reply_markup
-    )
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     session = get_session()
@@ -141,10 +116,30 @@ async def receive_group_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
         group = create_group(session, name=group_name, created_by=user.id)
         group_id = group[0]
         add_member_to_group(session, group_id=group_id, user_id=user.id)
-
-        _init_group_creation_context(context, group_id, group_name)
-        await _announce_group_created(update.message, group_name)
-
+        
+        # Store group_id in context for next steps
+        context.user_data['current_group_id'] = group_id
+        context.user_data['group_name'] = group_name
+        
+        # Create keyboard with "Find my ID" button
+        keyboard = [
+            [InlineKeyboardButton("🆔 How to find user IDs", callback_data="help_find_id")],
+            [InlineKeyboardButton("✅ Done adding members", callback_data="done_adding_members")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f"✅ Group *'{group_name}'* created!\n\n"
+            f"👥 *Current members:* 1 (you, the creator)\n\n"
+            f"*How to add members:*\n"
+            f"1️⃣ Forward any message from the person you want to add\n"
+            f"2️⃣ Send their Telegram user ID (number) *or* custom ID (e.g. `john-doe`)\n"
+            f"3️⃣ Click 'Done' after adding at least *one* more person (2 total members)\n\n"
+            f"💡 Need help finding user IDs? Click the button below!",
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+        
         return WAITING_FOR_MEMBER_SELECTION
 
     finally:
