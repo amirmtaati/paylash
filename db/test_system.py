@@ -4,8 +4,9 @@ Test script to verify the PayLash system works correctly
 """
 from db.schema import metadata
 from db.connection import db_get, get_session
+from db.migrations import ensure_users_custom_id_column
 from repositories.users import create_user, get_user_by_id
-from repositories.groups import create_group, add_member_to_group, get_members_of_group, get_member_count
+from repositories.groups import create_group, add_member_to_group, get_groups_for_user, get_members_of_group, get_member_count
 from repositories.expenses import create_expense, add_participant, get_participants_for_expense
 from services.expense_service import create_expense_with_split
 from services.balance_service import get_user_balance, get_balance_with_names
@@ -120,3 +121,37 @@ if __name__ == "__main__":
     
     print("\n💡 Tip: Check test_paylash.db to see the data created")
     print("💡 To test the bot, run: python3 -m bot.main")
+
+
+def test_group_visibility_for_added_member():
+    """Added members should see groups in /mygroups source query, while creator remains owner."""
+    engine = db_get()
+    metadata.create_all(engine)
+    ensure_users_custom_id_column(engine)
+    session = get_session()
+
+    try:
+        import time
+        base = int(time.time() * 1000)
+        owner_id = base + 1
+        member_id = base + 2
+
+        create_user(session, user_id=owner_id, username="owner", first_name="Owner")
+        create_user(session, user_id=member_id, username="member", first_name="Member")
+
+        group = create_group(session, name="Trip", created_by=owner_id)
+        group_id = group[0]
+
+        # Creator is expected to be added by handler flow.
+        add_member_to_group(session, group_id=group_id, user_id=owner_id)
+        add_member_to_group(session, group_id=group_id, user_id=member_id)
+
+        owner_groups = get_groups_for_user(session, owner_id)
+        member_groups = get_groups_for_user(session, member_id)
+
+        assert any(g[0] == group_id for g in owner_groups)
+        assert any(g[0] == group_id for g in member_groups)
+        assert group[2] == owner_id  # created_by
+        assert group[2] != member_id
+    finally:
+        session.close()
