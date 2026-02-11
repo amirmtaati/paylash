@@ -1,12 +1,11 @@
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, 
-    filters, ConversationHandler, CallbackQueryHandler
+    filters, ConversationHandler
 )
 from bot.handlers import (
     start, balance, my_groups,
     create_group_start, receive_group_name, add_group_member,
     add_expense_start, receive_group_selection, handle_expense_details,
-    handle_button_callback,
     setid,
     addmember,
     cancel,
@@ -36,17 +35,13 @@ def main():
     
     # Conversation handler for creating groups
     create_group_conv = ConversationHandler(
-        entry_points=[
-            CommandHandler("creategroup", create_group_start),
-            CallbackQueryHandler(create_group_start, pattern="^create_new_group$")
-        ],
+        entry_points=[CommandHandler("creategroup", create_group_start)],
         states={
             WAITING_FOR_GROUP_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_name)
             ],
             WAITING_FOR_MEMBER_SELECTION: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, add_group_member),
-                CallbackQueryHandler(add_group_member, pattern="^(done_adding_members|help_find_id|continue_adding)$")
+                MessageHandler(filters.TEXT & ~filters.COMMAND, add_group_member)
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
@@ -55,21 +50,15 @@ def main():
     
     # Conversation handler for adding expenses
     add_expense_conv = ConversationHandler(
-        entry_points=[
-            CommandHandler("addexpense", add_expense_start),
-            CallbackQueryHandler(add_expense_start, pattern="^add_expense_quick$")
-        ],
+        entry_points=[CommandHandler("addexpense", add_expense_start)],
         states={
             WAITING_FOR_GROUP_SELECTION: [
-                CallbackQueryHandler(receive_group_selection)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_selection)
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
     app.add_handler(add_expense_conv)
-    
-    # Global callback query handler for inline buttons (must be before message handler)
-    app.add_handler(CallbackQueryHandler(handle_button_callback))
     
     # Handler for expense details (when user has selected a group)
     app.add_handler(MessageHandler(
@@ -78,7 +67,7 @@ def main():
     ))
     
     print("🤖 PayLash Bot starting...")
-    print("✨ Beautiful UI with inline buttons enabled!")
+    print("⌨️ Command-based workflow enabled (inline buttons removed).")
     print("\nCommands available:")
     print("  /start - Start the bot")
     print("  /creategroup - Create a new group")
@@ -87,7 +76,7 @@ def main():
     print("  /mygroups - View your groups")
     print("  /setid - Set your shareable custom ID")
     print("  /addmember - Add members to your group by name")
-    print("\n💡 Tip: Use the inline buttons for a better experience!")
+    print("\n💡 Tip: Type /start anytime to see available commands.")
     app.run_polling()
 
 if __name__ == "__main__":
