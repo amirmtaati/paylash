@@ -25,6 +25,37 @@ def ensure_user_exists(session, user_id, username, first_name):
     if not user_exists(session, user_id):
         create_user(session, user_id=user_id, username=username, first_name=first_name)
 
+
+def is_group_creator(session, group_id, user_id):
+    """Check whether the user created the group."""
+    group = get_group_by_id(session, group_id)
+    return bool(group and group[2] == user_id)
+
+
+def _init_group_creation_context(context: ContextTypes.DEFAULT_TYPE, group_id: int, group_name: str):
+    context.user_data['current_group_id'] = group_id
+    context.user_data['group_name'] = group_name
+
+
+async def _announce_group_created(target_message, group_name: str):
+    keyboard = [
+        [InlineKeyboardButton("🆔 How to find user IDs", callback_data="help_find_id")],
+        [InlineKeyboardButton("✅ Done adding members", callback_data="done_adding_members")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await target_message.reply_text(
+        f"✅ Group *'{group_name}'* created!\n\n"
+        f"👥 *Current members:* 1 (you, the creator)\n\n"
+        f"*How to add members:*\n"
+        f"1️⃣ Forward any message from the person you want to add\n"
+        f"2️⃣ Send their Telegram user ID (number) *or* custom ID (e.g. `john-doe`)\n"
+        f"3️⃣ Click 'Done' after adding at least *one* more person (2 total members)\n\n"
+        f"💡 Need help finding user IDs? Click the button below!",
+        parse_mode='Markdown',
+        reply_markup=reply_markup
+    )
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     session = get_session()
@@ -50,7 +81,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💸 `/addexpense` - Record an expense\n"
             f"📊 `/balance` - Check who owes what\n"
             f"📋 `/mygroups` - View your groups\n"
-            f"🆔 `/setid <custom_id>` - Set your own shareable ID\n\n"
+            f"🆔 `/setid <custom_id>` - Set your own shareable ID\n"
+            f"👥 `/addmember <group> <id...>` - Add members quickly\n\n"
             f"_Your Telegram ID: `{user.id}`_"
         )
         
@@ -67,22 +99,34 @@ async def create_group_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """Start the group creation process"""
     user = update.effective_user
     session = get_session()
-    
+
     try:
         ensure_user_exists(session, user.id, user.username, user.first_name)
 
         if update.callback_query:
             await update.callback_query.answer()
 
+        if update.message and context.args:
+            group_name = " ".join(context.args).strip()
+            group = create_group(session, name=group_name, created_by=user.id)
+            group_id = group[0]
+            add_member_to_group(session, group_id=group_id, user_id=user.id)
+
+            _init_group_creation_context(context, group_id, group_name)
+            await _announce_group_created(update.message, group_name)
+            return WAITING_FOR_MEMBER_SELECTION
+
         reply_target = update.message if update.message else update.callback_query.message
         await reply_target.reply_text(
             "Let's create a new group! 🎉\n\n"
             "What would you like to name this group?\n"
-            "(e.g., 'Pizza Night', 'Trip to Rome', 'Apartment 4B')"
+            "(e.g., 'Pizza Night', 'Trip to Rome', 'Apartment 4B')\n\n"
+            "Tip: You can also do this directly: `/creategroup <group_name>`",
+            parse_mode='Markdown'
         )
 
         return WAITING_FOR_GROUP_NAME
-        
+
     finally:
         session.close()
 
@@ -92,46 +136,37 @@ async def receive_group_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
     group_name = update.message.text.strip()
     user = update.effective_user
     session = get_session()
-    
+
     try:
-        # Create the group
         group = create_group(session, name=group_name, created_by=user.id)
         group_id = group[0]
-        
-        # Add creator as first member
         add_member_to_group(session, group_id=group_id, user_id=user.id)
-        
-        # Store group_id in context for next steps
-        context.user_data['current_group_id'] = group_id
-        context.user_data['group_name'] = group_name
-        
-        # Create keyboard with "Find my ID" button
-        keyboard = [
-            [InlineKeyboardButton("🆔 How to find user IDs", callback_data="help_find_id")],
-            [InlineKeyboardButton("✅ Done adding members", callback_data="done_adding_members")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(
-            f"✅ Group *'{group_name}'* created!\n\n"
-            f"👥 *Current members:* 1 (you)\n\n"
-            f"*How to add members:*\n"
-            f"1️⃣ Forward any message from the person you want to add\n"
-            f"2️⃣ Send their Telegram user ID (number) *or* custom ID (e.g. `john-doe`)\n"
-            f"3️⃣ Click 'Done' when you have at least 2 members\n\n"
-            f"💡 Need help finding user IDs? Click the button below!",
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
-        
+
+        _init_group_creation_context(context, group_id, group_name)
+        await _announce_group_created(update.message, group_name)
+
         return WAITING_FOR_MEMBER_SELECTION
-        
+
     finally:
         session.close()
 
 
 async def add_group_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Add members to the group - handles text messages and forwarded messages"""
+
+    group_id = context.user_data.get('current_group_id')
+    acting_user_id = update.effective_user.id
+
+    session = get_session()
+    try:
+        if group_id and not is_group_creator(session, group_id, acting_user_id):
+            await (update.message or update.callback_query.message).reply_text(
+                "⚠️ Only the group creator can add members. You can still use /addexpense for this group."
+            )
+            return WAITING_FOR_MEMBER_SELECTION
+
+    finally:
+        session.close()
     
     # Handle callback queries (button clicks)
     if update.callback_query:
@@ -152,7 +187,7 @@ async def add_group_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await query.edit_message_text(
                         f"⚠️ *Not enough members!*\n\n"
                         f"Your group has {member_count} member(s).\n"
-                        f"You need at least *2 members* to create expenses.\n\n"
+                        f"You (the creator) are already counted, so add at least *1 more member*.\n\n"
                         f"Click below to continue adding members:",
                         parse_mode='Markdown',
                         reply_markup=reply_markup
@@ -204,6 +239,11 @@ async def add_group_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return WAITING_FOR_MEMBER_SELECTION
     
+        return WAITING_FOR_MEMBER_SELECTION
+
+    if not update.message:
+        return WAITING_FOR_MEMBER_SELECTION
+
     # Handle forwarded messages
     if update.message.forward_from:
         forwarded_user = update.message.forward_from
@@ -484,6 +524,71 @@ async def add_expense(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await add_expense_start(update, context)
 
 
+async def addmember(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Add one or more members to a group owned by the caller.
+
+    Usage: /addmember <group_name> <id1> [id2 ...]
+    """
+    user = update.effective_user
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "Usage: /addmember <group_name> <id1> [id2 ...]\n"
+            "Example: /addmember Trip alice-01 123456789"
+        )
+        return
+
+    group_name = context.args[0]
+    member_identifiers = context.args[1:]
+
+    session = get_session()
+    try:
+        ensure_user_exists(session, user.id, user.username, user.first_name)
+
+        owned_groups = [g for g in get_groups_for_user(session, user.id) if g[2] == user.id]
+        group = next((g for g in owned_groups if g[1].lower() == group_name.lower()), None)
+
+        if not group:
+            await update.message.reply_text(
+                f"❌ Group `{group_name}` not found among groups you own.\n"
+                "Use /mygroups to see your groups.",
+                parse_mode='Markdown'
+            )
+            return
+
+        group_id = group[0]
+        members = get_members_of_group(session, group_id)
+        member_ids = {m[1] for m in members}
+        added = []
+        skipped = []
+
+        for identifier in member_identifiers:
+            member = get_user_by_identifier(session, identifier)
+            if not member:
+                skipped.append(f"{identifier} (user not found)")
+                continue
+
+            member_id = member[0]
+            if member_id in member_ids:
+                skipped.append(f"{identifier} (already in group)")
+                continue
+
+            add_member_to_group(session, group_id=group_id, user_id=member_id)
+            member_ids.add(member_id)
+            added.append(identifier)
+
+        member_count = len(member_ids)
+
+        lines = [f"✅ Updated *{group[1]}*.", f"👥 Total members: {member_count}"]
+        if added:
+            lines.append("Added: " + ", ".join(f"`{x}`" for x in added))
+        if skipped:
+            lines.append("Skipped: " + ", ".join(f"`{x}`" for x in skipped))
+
+        await update.message.reply_text("\n".join(lines), parse_mode='Markdown')
+    finally:
+        session.close()
+
+
 async def setid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Set or view the caller custom ID for easy group invites."""
     user = update.effective_user
@@ -657,20 +762,10 @@ async def handle_button_callback(update: Update, context: ContextTypes.DEFAULT_T
     
     # Route to appropriate handler based on callback data
     if query.data == "create_new_group":
-        # Start group creation
-        await query.message.reply_text(
-            "Let's create a new group! 🎉\n\n"
-            "What would you like to name this group?\n"
-            "(e.g., 'Pizza Night', 'Trip to Rome', 'Apartment 4B')"
-        )
-        # Note: This should ideally start the conversation handler
-        # For now, user will need to use /creategroup command
+        return await create_group_start(update, context)
         
     elif query.data == "add_expense_quick":
-        # Redirect to add expense
-        await query.message.reply_text(
-            "Please use the /addexpense command to add an expense!"
-        )
+        return await add_expense_start(update, context)
         
     elif query.data == "check_balance":
         # Show balance
@@ -765,3 +860,9 @@ async def handle_button_callback(update: Update, context: ContextTypes.DEFAULT_T
             
         finally:
             session.close()
+
+
+    else:
+        await query.message.reply_text(
+            "⚠️ That button action is not available right now. Please try /start again."
+        )
