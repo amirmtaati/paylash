@@ -25,6 +25,12 @@ def ensure_user_exists(session, user_id, username, first_name):
     if not user_exists(session, user_id):
         create_user(session, user_id=user_id, username=username, first_name=first_name)
 
+
+def is_group_creator(session, group_id, user_id):
+    """Check whether the user created the group."""
+    group = get_group_by_id(session, group_id)
+    return bool(group and group[2] == user_id)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     session = get_session()
@@ -114,11 +120,11 @@ async def receive_group_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         await update.message.reply_text(
             f"✅ Group *'{group_name}'* created!\n\n"
-            f"👥 *Current members:* 1 (you)\n\n"
+            f"👥 *Current members:* 1 (you, the creator)\n\n"
             f"*How to add members:*\n"
             f"1️⃣ Forward any message from the person you want to add\n"
             f"2️⃣ Send their Telegram user ID (number) *or* custom ID (e.g. `john-doe`)\n"
-            f"3️⃣ Click 'Done' when you have at least 2 members\n\n"
+            f"3️⃣ Click 'Done' after adding at least *one* more person (2 total members)\n\n"
             f"💡 Need help finding user IDs? Click the button below!",
             parse_mode='Markdown',
             reply_markup=reply_markup
@@ -132,6 +138,20 @@ async def receive_group_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def add_group_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Add members to the group - handles text messages and forwarded messages"""
+
+    group_id = context.user_data.get('current_group_id')
+    acting_user_id = update.effective_user.id
+
+    session = get_session()
+    try:
+        if group_id and not is_group_creator(session, group_id, acting_user_id):
+            await (update.message or update.callback_query.message).reply_text(
+                "⚠️ Only the group creator can add members. You can still use /addexpense for this group."
+            )
+            return WAITING_FOR_MEMBER_SELECTION
+
+    finally:
+        session.close()
     
     # Handle callback queries (button clicks)
     if update.callback_query:
@@ -152,7 +172,7 @@ async def add_group_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await query.edit_message_text(
                         f"⚠️ *Not enough members!*\n\n"
                         f"Your group has {member_count} member(s).\n"
-                        f"You need at least *2 members* to create expenses.\n\n"
+                        f"You (the creator) are already counted, so add at least *1 more member*.\n\n"
                         f"Click below to continue adding members:",
                         parse_mode='Markdown',
                         reply_markup=reply_markup
@@ -657,20 +677,10 @@ async def handle_button_callback(update: Update, context: ContextTypes.DEFAULT_T
     
     # Route to appropriate handler based on callback data
     if query.data == "create_new_group":
-        # Start group creation
-        await query.message.reply_text(
-            "Let's create a new group! 🎉\n\n"
-            "What would you like to name this group?\n"
-            "(e.g., 'Pizza Night', 'Trip to Rome', 'Apartment 4B')"
-        )
-        # Note: This should ideally start the conversation handler
-        # For now, user will need to use /creategroup command
+        return await create_group_start(update, context)
         
     elif query.data == "add_expense_quick":
-        # Redirect to add expense
-        await query.message.reply_text(
-            "Please use the /addexpense command to add an expense!"
-        )
+        return await add_expense_start(update, context)
         
     elif query.data == "check_balance":
         # Show balance
@@ -765,3 +775,9 @@ async def handle_button_callback(update: Update, context: ContextTypes.DEFAULT_T
             
         finally:
             session.close()
+
+
+    else:
+        await query.message.reply_text(
+            "⚠️ That button action is not available right now. Please try /start again."
+        )
