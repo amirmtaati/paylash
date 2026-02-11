@@ -68,8 +68,10 @@ def main():
     )
     app.add_handler(add_expense_conv)
     
-    # Global callback query handler for inline buttons (must be before message handler)
-    app.add_handler(CallbackQueryHandler(handle_button_callback))
+    # Global callback query handler for non-conversation inline buttons.
+    # Keep this scoped so conversation entry-point callbacks are handled by
+    # their corresponding ConversationHandler.
+    app.add_handler(CallbackQueryHandler(handle_button_callback, pattern="^(check_balance|view_groups)$"))
     
     # Handler for expense details (when user has selected a group)
     app.add_handler(MessageHandler(
