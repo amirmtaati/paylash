@@ -7,25 +7,37 @@ from bot.handlers import (
     create_group_start, receive_group_name, add_group_member,
     add_expense_start, receive_group_selection, handle_expense_details,
     handle_button_callback,
+    setid,
     cancel,
     WAITING_FOR_GROUP_NAME, WAITING_FOR_MEMBER_SELECTION, WAITING_FOR_GROUP_SELECTION
 )
 import os
+from db.connection import db_get
+from db.schema import metadata
+from db.migrations import ensure_users_custom_id_column
 
 def main():
     # Get token from environment or use hardcoded (not recommended for production!)
     token = os.getenv("TELEGRAM_BOT_TOKEN", "8529720422:AAEOTNA8dwYf0Z98qyvxUmtYKY3NESvaTSo")
     
+    engine = db_get()
+    metadata.create_all(engine)
+    ensure_users_custom_id_column(engine)
+
     app = Application.builder().token(token).build()
     
     # Simple command handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("balance", balance))
     app.add_handler(CommandHandler("mygroups", my_groups))
+    app.add_handler(CommandHandler("setid", setid))
     
     # Conversation handler for creating groups
     create_group_conv = ConversationHandler(
-        entry_points=[CommandHandler("creategroup", create_group_start)],
+        entry_points=[
+            CommandHandler("creategroup", create_group_start),
+            CallbackQueryHandler(create_group_start, pattern="^create_new_group$")
+        ],
         states={
             WAITING_FOR_GROUP_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_name)
@@ -41,7 +53,10 @@ def main():
     
     # Conversation handler for adding expenses
     add_expense_conv = ConversationHandler(
-        entry_points=[CommandHandler("addexpense", add_expense_start)],
+        entry_points=[
+            CommandHandler("addexpense", add_expense_start),
+            CallbackQueryHandler(add_expense_start, pattern="^add_expense_quick$")
+        ],
         states={
             WAITING_FOR_GROUP_SELECTION: [
                 CallbackQueryHandler(receive_group_selection)
@@ -52,7 +67,7 @@ def main():
     app.add_handler(add_expense_conv)
     
     # Global callback query handler for inline buttons (must be before message handler)
-    app.add_handler(CallbackQueryHandler(handle_button_callback))
+    app.add_handler(CallbackQueryHandler(handle_button_callback, pattern="^(check_balance|view_groups)$"))
     
     # Handler for expense details (when user has selected a group)
     app.add_handler(MessageHandler(
@@ -68,6 +83,7 @@ def main():
     print("  /addexpense - Add an expense")
     print("  /balance - Check your balance")
     print("  /mygroups - View your groups")
+    print("  /setid - Set your shareable custom ID")
     print("\n💡 Tip: Use the inline buttons for a better experience!")
     app.run_polling()
 
