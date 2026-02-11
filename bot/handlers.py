@@ -11,6 +11,7 @@ from repositories.groups import (
 from services.expense_service import create_expense_with_split
 from services.balance_service import get_balance_with_names
 from decimal import Decimal
+import shlex
 
 # Conversation states
 WAITING_FOR_GROUP_NAME, WAITING_FOR_MEMBER_SELECTION, WAITING_FOR_GROUP_SELECTION = range(3)
@@ -525,26 +526,70 @@ async def addmember(update: Update, context: ContextTypes.DEFAULT_TYPE):
     Usage: /addmember <group_name> <id1> [id2 ...]
     """
     user = update.effective_user
-    if len(context.args) < 2:
+    if not update.message or not update.message.text:
+        return
+
+    payload = update.message.text.partition(' ')[2].strip()
+    if not payload:
         await update.message.reply_text(
             "Usage: /addmember <group_name> <id1> [id2 ...]\n"
-            "Example: /addmember Trip alice-01 123456789"
+            "Examples:\n"
+            "• /addmember Trip alice-01 123456789\n"
+            "• /addmember Trip to Rome alice-01 123456789\n"
+            "• /addmember \"Trip to Rome\" alice-01 123456789"
         )
         return
 
-    group_name = context.args[0]
-    member_identifiers = context.args[1:]
+    try:
+        tokens = shlex.split(payload)
+    except ValueError:
+        tokens = payload.split()
+
+    if len(tokens) < 2:
+        await update.message.reply_text(
+            "Usage: /addmember <group_name> <id1> [id2 ...]"
+        )
+        return
 
     session = get_session()
     try:
         ensure_user_exists(session, user.id, user.username, user.first_name)
 
         owned_groups = [g for g in get_groups_for_user(session, user.id) if g[2] == user.id]
-        group = next((g for g in owned_groups if g[1].lower() == group_name.lower()), None)
+
+        group = None
+        member_identifiers = []
+        longest_match = -1
+
+        for candidate in owned_groups:
+            name_tokens = candidate[1].strip().split()
+            if not name_tokens or len(name_tokens) >= len(tokens):
+                continue
+
+            if [t.lower() for t in tokens[:len(name_tokens)]] == [t.lower() for t in name_tokens]:
+                if len(name_tokens) > longest_match:
+                    longest_match = len(name_tokens)
+                    group = candidate
+                    member_identifiers = tokens[len(name_tokens):]
+
+        if not group:
+            # Fallback: explicit quoted name support from /addmember "My Group" user1 user2
+            quoted_name = tokens[0]
+            direct_group = next((g for g in owned_groups if g[1].lower() == quoted_name.lower()), None)
+            if direct_group:
+                group = direct_group
+                member_identifiers = tokens[1:]
+
+        if group and not member_identifiers:
+            await update.message.reply_text(
+                "Please provide at least one member identifier after the group name."
+            )
+            return
 
         if not group:
             await update.message.reply_text(
-                f"❌ Group `{group_name}` not found among groups you own.\n"
+                "❌ Could not match a group name from your command.\n"
+                "Tip: use quotes for clarity, e.g. `/addmember \"Trip to Rome\" alice-01`\n"
                 "Use /mygroups to see your groups.",
                 parse_mode='Markdown'
             )
@@ -754,15 +799,8 @@ async def handle_button_callback(update: Update, context: ContextTypes.DEFAULT_T
     """Handle all inline button callbacks"""
     query = update.callback_query
     await query.answer()
-    
-    # Route to appropriate handler based on callback data
-    if query.data == "create_new_group":
-        return await create_group_start(update, context)
-        
-    elif query.data == "add_expense_quick":
-        return await add_expense_start(update, context)
-        
-    elif query.data == "check_balance":
+
+    if query.data == "check_balance":
         # Show balance
         user_id = query.from_user.id
         session = get_session()
@@ -855,7 +893,6 @@ async def handle_button_callback(update: Update, context: ContextTypes.DEFAULT_T
             
         finally:
             session.close()
-
 
     else:
         await query.message.reply_text(
