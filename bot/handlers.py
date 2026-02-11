@@ -1,4 +1,4 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler
 from db.connection import get_session
 from repositories.users import (
@@ -39,20 +39,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         ensure_user_exists(session, user.id, user.username, user.first_name)
         
-        # Create beautiful inline keyboard
-        keyboard = [
-            [InlineKeyboardButton("🆕 Create Group", callback_data="create_new_group")],
-            [InlineKeyboardButton("💰 Add Expense", callback_data="add_expense_quick")],
-            [InlineKeyboardButton("📊 My Balance", callback_data="check_balance")],
-            [InlineKeyboardButton("📋 My Groups", callback_data="view_groups")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
         welcome_message = (
             f"👋 *Welcome, {user.first_name}!*\n\n"
             f"🎯 *PayLash* helps you split bills with friends effortlessly.\n\n"
-            f"*Quick Actions:*\n"
-            f"Use the buttons below or these commands:\n\n"
+            f"*Commands:*\n\n"
             f"💡 `/creategroup` - Start a new group\n"
             f"💸 `/addexpense` - Record an expense\n"
             f"📊 `/balance` - Check who owes what\n"
@@ -64,8 +54,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(
             welcome_message,
-            parse_mode='Markdown',
-            reply_markup=reply_markup
+            parse_mode='Markdown'
         )
     finally:
         session.close()
@@ -79,21 +68,24 @@ async def create_group_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         ensure_user_exists(session, user.id, user.username, user.first_name)
 
-        if update.callback_query:
-            await update.callback_query.answer()
-
         if update.message and context.args:
             group_name = " ".join(context.args).strip()
             group = create_group(session, name=group_name, created_by=user.id)
             group_id = group[0]
             add_member_to_group(session, group_id=group_id, user_id=user.id)
 
-            _init_group_creation_context(context, group_id, group_name)
-            await _announce_group_created(update.message, group_name)
+            context.user_data['current_group_id'] = group_id
+            context.user_data['group_name'] = group_name
+            await update.message.reply_text(
+                f"✅ Group *'{group_name}'* created!\n\n"
+                "Now add members by sending each Telegram ID/custom ID one-by-one.\n"
+                "When finished, send `done`.\n"
+                "Send `cancel` to abort.",
+                parse_mode='Markdown'
+            )
             return WAITING_FOR_MEMBER_SELECTION
 
-        reply_target = update.message if update.message else update.callback_query.message
-        await reply_target.reply_text(
+        await update.message.reply_text(
             "Let's create a new group! 🎉\n\n"
             "What would you like to name this group?\n"
             "(e.g., 'Pizza Night', 'Trip to Rome', 'Apartment 4B')\n\n"
@@ -122,23 +114,15 @@ async def receive_group_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.user_data['current_group_id'] = group_id
         context.user_data['group_name'] = group_name
         
-        # Create keyboard with "Find my ID" button
-        keyboard = [
-            [InlineKeyboardButton("🆔 How to find user IDs", callback_data="help_find_id")],
-            [InlineKeyboardButton("✅ Done adding members", callback_data="done_adding_members")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
         await update.message.reply_text(
             f"✅ Group *'{group_name}'* created!\n\n"
             f"👥 *Current members:* 1 (you, the creator)\n\n"
             f"*How to add members:*\n"
             f"1️⃣ Forward any message from the person you want to add\n"
             f"2️⃣ Send their Telegram user ID (number) *or* custom ID (e.g. `john-doe`)\n"
-            f"3️⃣ Click 'Done' after adding at least *one* more person (2 total members)\n\n"
-            f"💡 Need help finding user IDs? Click the button below!",
-            parse_mode='Markdown',
-            reply_markup=reply_markup
+            f"3️⃣ Type `done` after adding at least *one* more person (2 total members)\n\n"
+            f"Type `cancel` to abort.",
+            parse_mode='Markdown'
         )
         
         return WAITING_FOR_MEMBER_SELECTION
@@ -156,7 +140,7 @@ async def add_group_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session = get_session()
     try:
         if group_id and not is_group_creator(session, group_id, acting_user_id):
-            await (update.message or update.callback_query.message).reply_text(
+            await update.message.reply_text(
                 "⚠️ Only the group creator can add members. You can still use /addexpense for this group."
             )
             return WAITING_FOR_MEMBER_SELECTION
@@ -164,79 +148,6 @@ async def add_group_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         session.close()
     
-    # Handle callback queries (button clicks)
-    if update.callback_query:
-        query = update.callback_query
-        await query.answer()
-        
-        if query.data == "done_adding_members":
-            group_id = context.user_data.get('current_group_id')
-            session = get_session()
-            
-            try:
-                member_count = get_member_count(session, group_id)
-                
-                if member_count < 2:
-                    keyboard = [[InlineKeyboardButton("🔙 Continue adding", callback_data="continue_adding")]]
-                    reply_markup = InlineKeyboardMarkup(keyboard)
-                    
-                    await query.edit_message_text(
-                        f"⚠️ *Not enough members!*\n\n"
-                        f"Your group has {member_count} member(s).\n"
-                        f"You (the creator) are already counted, so add at least *1 more member*.\n\n"
-                        f"Click below to continue adding members:",
-                        parse_mode='Markdown',
-                        reply_markup=reply_markup
-                    )
-                    return WAITING_FOR_MEMBER_SELECTION
-                
-                group = get_group_by_id(session, group_id)
-                group_name = group[1]
-                
-                await query.edit_message_text(
-                    f"🎉 *Group '{group_name}' is ready!*\n\n"
-                    f"👥 Members: {member_count}\n\n"
-                    f"You can now:\n"
-                    f"• /addexpense - Add expenses\n"
-                    f"• /mygroups - View all groups\n"
-                    f"• /balance - Check balances",
-                    parse_mode='Markdown'
-                )
-                
-                context.user_data.clear()
-                return ConversationHandler.END
-                
-            finally:
-                session.close()
-        
-        elif query.data == "help_find_id":
-            await query.answer()
-            await query.message.reply_text(
-                "🆔 *How to find Telegram user IDs:*\n\n"
-                "*Method 1: Forward a message* (easiest!)\n"
-                "Just forward any message from the person to me.\n\n"
-                "*Method 2: Use a bot*\n"
-                "1. Ask the person to message @userinfobot\n"
-                "2. The bot will reply with their user ID\n"
-                "3. Send me that number\n\n"
-                "*Method 3: Share contact*\n"
-                "Share the person's contact with me.\n\n"
-                "Continue adding members below! 👇",
-                parse_mode='Markdown'
-            )
-            return WAITING_FOR_MEMBER_SELECTION
-        
-        elif query.data == "continue_adding":
-            await query.edit_message_text(
-                "👥 Continue adding members:\n\n"
-                "• Forward a message from them\n"
-                "• Or send their user ID number/custom ID\n"
-                "• Click 'Done' when finished"
-            )
-            return WAITING_FOR_MEMBER_SELECTION
-    
-        return WAITING_FOR_MEMBER_SELECTION
-
     if not update.message:
         return WAITING_FOR_MEMBER_SELECTION
 
@@ -268,17 +179,11 @@ async def add_group_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             add_member_to_group(session, group_id=group_id, user_id=member_id)
             member_count = get_member_count(session, group_id)
             
-            keyboard = [
-                [InlineKeyboardButton("✅ Done adding members", callback_data="done_adding_members")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
             await update.message.reply_text(
                 f"✅ *{member_name}* added to group!\n\n"
                 f"👥 Total members: {member_count}\n\n"
-                f"Forward another message or click 'Done' below:",
-                parse_mode='Markdown',
-                reply_markup=reply_markup
+                f"Forward another message or type `done` when finished.",
+                parse_mode='Markdown'
             )
             
             return WAITING_FOR_MEMBER_SELECTION
@@ -352,19 +257,14 @@ async def add_group_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             add_member_to_group(session, group_id=group_id, user_id=member_id)
             member_count = get_member_count(session, group_id)
 
-            keyboard = [
-                [InlineKeyboardButton("✅ Done adding members", callback_data="done_adding_members")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-
             custom_id = member[1]
             id_hint = f" (custom ID: {custom_id})" if custom_id else ""
 
             await update.message.reply_text(
                 f"✅ Member added{id_hint}!\n\n"
                 f"👥 Total members: {member_count}\n\n"
-                "Add another or click 'Done' below:",
-                reply_markup=reply_markup
+                "Add another or type `done`.",
+                parse_mode='Markdown'
             )
 
             return WAITING_FOR_MEMBER_SELECTION
@@ -384,15 +284,11 @@ async def my_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
         groups = get_groups_for_user(session, user.id)
         
         if not groups:
-            keyboard = [[InlineKeyboardButton("➕ Create Group", callback_data="create_new_group")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
             await update.message.reply_text(
                 "📋 *Your Groups*\n\n"
                 "You're not part of any groups yet.\n\n"
                 "Create a group to start splitting expenses!",
-                parse_mode='Markdown',
-                reply_markup=reply_markup
+                parse_mode='Markdown'
             )
             return
         
@@ -414,17 +310,9 @@ async def my_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message += f"{i}. {emoji} *{group_name}*\n"
             message += f"   └ {member_count} members • ID: `{group_id}`\n\n"
         
-        # Add action buttons
-        keyboard = [
-            [InlineKeyboardButton("➕ Create New Group", callback_data="create_new_group")],
-            [InlineKeyboardButton("💰 Add Expense", callback_data="add_expense_quick")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
         await update.message.reply_text(
             message,
-            parse_mode='Markdown',
-            reply_markup=reply_markup
+            parse_mode='Markdown'
         )
         
     finally:
@@ -439,48 +327,35 @@ async def add_expense_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         ensure_user_exists(session, user.id, user.username, user.first_name)
 
-        if update.callback_query:
-            await update.callback_query.answer()
-
         groups = get_groups_for_user(session, user.id)
-        
-        reply_target = update.message if update.message else update.callback_query.message
 
         if not groups:
-            await reply_target.reply_text(
+            await update.message.reply_text(
                 "❌ You need to create a group first!\n"
                 "Use /creategroup to get started."
             )
             return ConversationHandler.END
-        
-        # Build keyboard with groups
-        keyboard = []
+
+        selectable_groups = []
+        message = "Select a group for this expense by sending the group ID or exact name:\n\n"
         for group in groups:
             group_id = group[0]
             group_name = group[1]
             member_count = get_member_count(session, group_id)
-            
-            # Only show groups with 2+ members
+
             if member_count >= 2:
-                keyboard.append([
-                    InlineKeyboardButton(
-                        f"{group_name} ({member_count} members)",
-                        callback_data=f"group_{group_id}"
-                    )
-                ])
-        
-        if not keyboard:
-            await reply_target.reply_text(
+                selectable_groups.append(group)
+                message += f"• `{group_id}` — *{group_name}* ({member_count} members)\n"
+
+        if not selectable_groups:
+            await update.message.reply_text(
                 "❌ None of your groups have enough members (minimum 2).\n"
                 "Add more members to your groups first!"
             )
             return ConversationHandler.END
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await reply_target.reply_text(
-            "Which group is this expense for?",
-            reply_markup=reply_markup
-        )
+
+        context.user_data['expense_selectable_groups'] = {g[0]: g[1] for g in selectable_groups}
+        await update.message.reply_text(message, parse_mode='Markdown')
         
         return WAITING_FOR_GROUP_SELECTION
         
@@ -508,13 +383,14 @@ async def receive_group_selection(update: Update, context: ContextTypes.DEFAULT_
         return WAITING_FOR_GROUP_SELECTION
 
     context.user_data['expense_group_id'] = group_id
+    context.user_data.pop('expense_selectable_groups', None)
     
     session = get_session()
     try:
         group = get_group_by_id(session, group_id)
         group_name = group[1]
         
-        await query.edit_message_text(
+        await update.message.reply_text(
             f"Adding expense to: {group_name}\n\n"
             f"Please send the expense details in this format:\n"
             f"`<amount> <description>`\n\n"
@@ -600,6 +476,14 @@ async def addmember(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if not group:
+            # Fallback: explicit quoted name support from /addmember "My Group" user1 user2
+            quoted_name = tokens[0]
+            direct_group = next((g for g in owned_groups if g[1].lower() == quoted_name.lower()), None)
+            if direct_group:
+                group = direct_group
+                member_identifiers = tokens[1:]
+
+        if group and not member_identifiers:
             await update.message.reply_text(
                 "❌ Could not match a group name from your command.\n"
                 "Tip: use quotes for clarity, e.g. `/addmember \"Trip to Rome\" alice-01`\n"
@@ -778,22 +662,14 @@ async def handle_expense_details(update: Update, context: ContextTypes.DEFAULT_T
             group_name = group[1]
             split_amount = amount / len(member_ids)
             
-            # Create success message with buttons
-            keyboard = [
-                [InlineKeyboardButton("➕ Add Another", callback_data="add_expense_quick")],
-                [InlineKeyboardButton("📊 Check Balance", callback_data="check_balance")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
             await update.message.reply_text(
                 f"✅ *Expense Added!*\n\n"
                 f"📁 Group: {group_name}\n"
                 f"💰 Total: €{amount}\n"
                 f"📝 Description: {description}\n"
                 f"👥 Split {len(member_ids)} ways: €{split_amount:.2f} each\n\n"
-                f"What's next?",
-                parse_mode='Markdown',
-                reply_markup=reply_markup
+                "Use /addexpense to add another, or /balance to review balances.",
+                parse_mode='Markdown'
             )
             
             # Clear the stored group

@@ -1,12 +1,11 @@
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, 
-    filters, ConversationHandler, CallbackQueryHandler
+    filters, ConversationHandler
 )
 from bot.handlers import (
     start, balance, my_groups,
     create_group_start, receive_group_name, add_group_member,
     add_expense_start, receive_group_selection, handle_expense_details,
-    handle_button_callback,
     setid,
     addmember,
     cancel,
@@ -84,7 +83,7 @@ def main():
     ))
     
     print("🤖 PayLash Bot starting...")
-    print("✨ Beautiful UI with inline buttons enabled!")
+    print("⌨️ Command-based workflow enabled (inline buttons removed).")
     print("\nCommands available:")
     print("  /start - Start the bot")
     print("  /creategroup - Create a new group")
@@ -93,7 +92,7 @@ def main():
     print("  /mygroups - View your groups")
     print("  /setid - Set your shareable custom ID")
     print("  /addmember - Add members to your group by name")
-    print("\n💡 Tip: Use the inline buttons for a better experience!")
+    print("\n💡 Tip: Type /start anytime to see available commands.")
     app.run_polling()
 
 if __name__ == "__main__":
