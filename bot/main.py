@@ -36,17 +36,20 @@ def main():
     
     # Conversation handler for creating groups
     create_group_conv = ConversationHandler(
+        allow_reentry=True,
         entry_points=[
             CommandHandler("creategroup", create_group_start),
             CallbackQueryHandler(create_group_start, pattern="^create_new_group$")
         ],
         states={
             WAITING_FOR_GROUP_NAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_name)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_name),
+                CallbackQueryHandler(handle_button_callback, pattern="^(check_balance|view_groups)$")
             ],
             WAITING_FOR_MEMBER_SELECTION: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, add_group_member),
-                CallbackQueryHandler(add_group_member, pattern="^(done_adding_members|help_find_id|continue_adding)$")
+                CallbackQueryHandler(add_group_member, pattern="^(done_adding_members|help_find_id|continue_adding)$"),
+                CallbackQueryHandler(handle_button_callback, pattern="^(check_balance|view_groups)$")
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
@@ -55,6 +58,7 @@ def main():
     
     # Conversation handler for adding expenses
     add_expense_conv = ConversationHandler(
+        allow_reentry=True,
         entry_points=[
             CommandHandler("addexpense", add_expense_start),
             CallbackQueryHandler(add_expense_start, pattern="^add_expense_quick$")
