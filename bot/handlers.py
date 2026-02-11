@@ -16,6 +16,42 @@ import shlex
 # Conversation states
 WAITING_FOR_GROUP_NAME, WAITING_FOR_MEMBER_SELECTION, WAITING_FOR_GROUP_SELECTION = range(3)
 
+
+def _parse_addepense_payload(payload: str):
+    """Parse `/addepense` payload into group name, amount and optional description.
+
+    Expected format:
+    /addepense GROUP_NAME... AMOUNT [DESCRIPTION...]
+    """
+    if not payload or not payload.strip():
+        return None, None, None, "Missing command arguments."
+
+    tokens = payload.split()
+    amount_idx = None
+    amount = None
+
+    for idx, token in enumerate(tokens):
+        normalized_token = token.replace(',', '.')
+        try:
+            amount = Decimal(normalized_token)
+            amount_idx = idx
+            break
+        except Exception:
+            continue
+
+    if amount_idx is None:
+        return None, None, None, "Missing expense amount."
+
+    if amount_idx == 0:
+        return None, None, None, "Missing group name before amount."
+
+    if amount <= 0:
+        return None, None, None, "Expense amount must be greater than zero."
+
+    group_name = " ".join(tokens[:amount_idx]).strip()
+    description = " ".join(tokens[amount_idx + 1:]).strip() or "Shared expense"
+    return group_name, amount, description, None
+
 def user_exists(session, user_id):
     """Check if user exists in database"""
     user = get_user_by_id(session, user_id)
@@ -44,7 +80,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🎯 *PayLash* helps you split bills with friends effortlessly.\n\n"
             f"*Commands:*\n\n"
             f"💡 `/creategroup` - Start a new group\n"
-            f"💸 `/addexpense` - Record an expense\n"
+            f"💸 `/addexpense` - Record an expense (guided)\n"
+            f"⚡ `/addepense <group> <amount> [description]` - Quick add\n"
             f"📊 `/balance` - Check who owes what\n"
             f"📋 `/mygroups` - View your groups\n"
             f"🆔 `/setid <custom_id>` - Set your own shareable ID\n"
@@ -364,42 +401,100 @@ async def add_expense_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def receive_group_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle group selection for expense"""
-    query = update.callback_query
-    await query.answer()
+    """Handle group selection for expense from text (ID/name) or callback data."""
+    selectable_groups = context.user_data.get('expense_selectable_groups', {})
 
-    if not query.data.startswith("group_"):
-        await query.message.reply_text(
-            "Please choose a group from the list, or use /cancel to exit this flow."
-        )
-        return WAITING_FOR_GROUP_SELECTION
+    if not selectable_groups:
+        if update.message:
+            await update.message.reply_text(
+                "⚠️ Expense group selection expired. Please run /addexpense again."
+            )
+        elif update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.message.reply_text(
+                "⚠️ Expense group selection expired. Please run /addexpense again."
+            )
+        return ConversationHandler.END
 
-    try:
-        group_id = int(query.data.split('_', maxsplit=1)[1])
-    except (ValueError, IndexError):
-        await query.message.reply_text(
-            "That group selection looks invalid. Please choose one of the listed group buttons."
-        )
+    group_id = None
+    target_message = update.message
+
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        target_message = query.message
+
+        if not query.data.startswith("group_"):
+            await query.message.reply_text(
+                "Please choose a valid group, or use /cancel to exit this flow."
+            )
+            return WAITING_FOR_GROUP_SELECTION
+
+        try:
+            candidate_id = int(query.data.split('_', maxsplit=1)[1])
+        except (ValueError, IndexError):
+            await query.message.reply_text(
+                "That group selection looks invalid. Please choose one of the listed groups."
+            )
+            return WAITING_FOR_GROUP_SELECTION
+
+        if candidate_id in selectable_groups:
+            group_id = candidate_id
+        else:
+            await query.message.reply_text(
+                "That group is not in your selectable list. Please pick one shown above."
+            )
+            return WAITING_FOR_GROUP_SELECTION
+
+    elif update.message and update.message.text:
+        selection = update.message.text.strip()
+
+        if selection.isdigit():
+            candidate_id = int(selection)
+            if candidate_id in selectable_groups:
+                group_id = candidate_id
+
+        if group_id is None:
+            normalized = selection.lower()
+            for candidate_id, candidate_name in selectable_groups.items():
+                if candidate_name.strip().lower() == normalized:
+                    group_id = candidate_id
+                    break
+
+        if group_id is None:
+            valid_choices = "\n".join(
+                f"• `{candidate_id}` — *{candidate_name}*"
+                for candidate_id, candidate_name in selectable_groups.items()
+            )
+            await update.message.reply_text(
+                "❌ I couldn't match that group.\n"
+                "Please send the *group ID* or *exact group name* from this list:\n"
+                f"{valid_choices}",
+                parse_mode='Markdown'
+            )
+            return WAITING_FOR_GROUP_SELECTION
+
+    else:
         return WAITING_FOR_GROUP_SELECTION
 
     context.user_data['expense_group_id'] = group_id
     context.user_data.pop('expense_selectable_groups', None)
-    
+
     session = get_session()
     try:
         group = get_group_by_id(session, group_id)
         group_name = group[1]
-        
-        await update.message.reply_text(
-            f"Adding expense to: {group_name}\n\n"
-            f"Please send the expense details in this format:\n"
-            f"`<amount> <description>`\n\n"
-            f"Example: `50 Pizza dinner`",
+
+        await target_message.reply_text(
+            f"✅ Group selected: *{group_name}*\n\n"
+            "Now send the expense details in this format:\n"
+            "`<amount> <description>`\n\n"
+            "Example: `50 Pizza dinner`",
             parse_mode='Markdown'
         )
-        
-        return ConversationHandler.END  # We'll handle the next message in add_expense_details
-        
+
+        return ConversationHandler.END  # Next text message will be handled by handle_expense_details
+
     finally:
         session.close()
 
@@ -407,6 +502,93 @@ async def receive_group_selection(update: Update, context: ContextTypes.DEFAULT_
 async def add_expense(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /addexpense command - wrapper to start conversation"""
     return await add_expense_start(update, context)
+
+
+async def addepense(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Create an expense directly from one command.
+
+    Usage:
+    /addepense <group name> <amount> [description]
+    """
+    user = update.effective_user
+    if not update.message or not update.message.text:
+        return
+
+    payload = update.message.text.partition(' ')[2].strip()
+    group_name, amount, description, parse_error = _parse_addepense_payload(payload)
+
+    if parse_error:
+        await update.message.reply_text(
+            "❌ Could not parse your command:\n"
+            f"{parse_error}\n\n"
+            "Usage: `/addepense <group name> <amount> [description]`\n"
+            "Examples:\n"
+            "• `/addepense Trip to Rome 120.50 Hotel`\n"
+            "• `/addepense Apartment 4B 35 groceries`",
+            parse_mode='Markdown'
+        )
+        return
+
+    session = get_session()
+    try:
+        ensure_user_exists(session, user.id, user.username, user.first_name)
+
+        groups = get_groups_for_user(session, user.id)
+        if not groups:
+            await update.message.reply_text(
+                "❌ You are not in any groups yet.\n"
+                "Create one with /creategroup first."
+            )
+            return
+
+        group = next((g for g in groups if g[1].strip().lower() == group_name.lower()), None)
+        if not group:
+            available_names = "\n".join(f"• {g[1]}" for g in groups)
+            await update.message.reply_text(
+                "❌ Group not found.\n"
+                f"I parsed group name as: *{group_name}*\n\n"
+                "Make sure the name matches exactly.\n"
+                "Your groups:\n"
+                f"{available_names}",
+                parse_mode='Markdown'
+            )
+            return
+
+        group_id = group[0]
+        members = get_members_of_group(session, group_id)
+        member_ids = [member[1] for member in members]
+
+        if len(member_ids) < 2:
+            await update.message.reply_text(
+                f"❌ Group *{group[1]}* has only {len(member_ids)} member(s).\n"
+                "At least 2 members are required to split an expense.",
+                parse_mode='Markdown'
+            )
+            return
+
+        create_expense_with_split(
+            session=session,
+            desc=description,
+            amount=amount,
+            paid_by=user.id,
+            group_id=group_id,
+            IDs=member_ids,
+            split_type="equal"
+        )
+
+        split_amount = amount / len(member_ids)
+        await update.message.reply_text(
+            "✅ *Expense added successfully!*\n\n"
+            f"📁 Group: *{group[1]}*\n"
+            f"💰 Amount: €{amount:.2f}\n"
+            f"📝 Description: {description}\n"
+            f"👥 Members: {len(member_ids)} (€{split_amount:.2f} each)",
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Failed to add expense: {e}")
+    finally:
+        session.close()
 
 
 async def addmember(update: Update, context: ContextTypes.DEFAULT_TYPE):

@@ -7,6 +7,7 @@ from bot.handlers import (
     create_group_start, receive_group_name, add_group_member,
     add_expense_start, receive_group_selection, handle_expense_details,
     handle_button_callback,
+    addepense,
     setid,
     addmember,
     cancel,
@@ -33,6 +34,7 @@ def main():
     app.add_handler(CommandHandler("mygroups", my_groups))
     app.add_handler(CommandHandler("setid", setid))
     app.add_handler(CommandHandler("addmember", addmember))
+    app.add_handler(CommandHandler("addepense", addepense))
     
     # Conversation handler for creating groups
     create_group_conv = ConversationHandler(
@@ -65,6 +67,7 @@ def main():
         ],
         states={
             WAITING_FOR_GROUP_SELECTION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_group_selection),
                 CallbackQueryHandler(receive_group_selection, pattern=r"^group_\d+$")
             ],
         },
@@ -89,6 +92,7 @@ def main():
     print("  /start - Start the bot")
     print("  /creategroup - Create a new group")
     print("  /addexpense - Add an expense")
+    print("  /addepense <group> <amount> [description] - Add an expense directly")
     print("  /balance - Check your balance")
     print("  /mygroups - View your groups")
     print("  /setid - Set your shareable custom ID")
